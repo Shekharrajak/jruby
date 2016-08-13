@@ -159,10 +159,7 @@ import org.jruby.truffle.language.objects.SingletonClassNode;
 import org.jruby.truffle.language.objects.SingletonClassNodeGen;
 import org.jruby.truffle.language.objects.WriteClassVariableNode;
 import org.jruby.truffle.language.objects.WriteInstanceVariableNode;
-import org.jruby.truffle.language.threadlocal.GetFromThreadLocalNodeGen;
-import org.jruby.truffle.language.threadlocal.ThreadLocalObjectNode;
-import org.jruby.truffle.language.threadlocal.ThreadLocalObjectNodeGen;
-import org.jruby.truffle.language.threadlocal.WrapInThreadLocalNodeGen;
+import org.jruby.truffle.language.threadlocal.*;
 import org.jruby.truffle.language.yield.YieldExpressionNode;
 import org.jruby.truffle.platform.graal.AssertConstantNodeGen;
 import org.jruby.truffle.platform.graal.AssertNotCompiledNodeGen;
@@ -204,7 +201,7 @@ public class BodyTranslator extends Translator {
     protected boolean usesRubiniusPrimitive = false;
 
     private static final Set<String> THREAD_LOCAL_GLOBAL_VARIABLES = new HashSet<>(
-            Arrays.asList("$~", "$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8", "$9", "$!", "$?")); // "$_"
+            Arrays.asList("$!", "$?")); // "$_"
 
     private static final Set<String> READ_ONLY_GLOBAL_VARIABLES = new HashSet<String>(
             Arrays.asList("$:", "$LOAD_PATH", "$-I", "$\"", "$LOADED_FEATURES", "$<", "$FILENAME", "$?", "$-a", "$-l", "$-p", "$!"));
@@ -1541,6 +1538,9 @@ public class BodyTranslator extends Translator {
 
         if (name.equals("$~")) {
             rhs = new CheckMatchVariableTypeNode(context, sourceSection, rhs);
+            rhs = WrapInThreadLocalNodeGen.create(context, sourceSection, rhs);
+
+            environment.declareVarWhereAllowed("$~");
         } else if (name.equals("$0")) {
             rhs = new CheckProgramNameVariableTypeNode(context, sourceSection, rhs);
         } else if (name.equals("$/")) {
@@ -1602,9 +1602,9 @@ public class BodyTranslator extends Translator {
 
             RubyNode assignment = localVarNode.makeWriteNode(rhs);
 
-            if (name.equals("$_")) {
+            if (name.equals("$_") || name.equals("$~")) {
                 // TODO CS 4-Jan-16 I can't work out why this is a *get* node
-                assignment = GetFromThreadLocalNodeGen.create(context, sourceSection, assignment);
+                assignment = new GetFromThreadLocalNode(context, sourceSection, assignment);
             }
 
             return addNewlineIfNeeded(node, assignment);
@@ -1645,8 +1645,12 @@ public class BodyTranslator extends Translator {
                 if (getSourcePath(sourceSection).equals(buildCorePath("regexp.rb"))) {
                     readNode = new RubiniusLastStringReadNode(context, sourceSection);
                 } else {
-                    readNode = GetFromThreadLocalNodeGen.create(context, sourceSection, readNode);
+                    readNode = new GetFromThreadLocalNode(context, sourceSection, readNode);
                 }
+            }
+
+            if (name.equals("$~")) {
+                readNode = new GetFromThreadLocalNode(context, sourceSection, readNode);
             }
 
             ret = readNode;
@@ -2381,7 +2385,10 @@ public class BodyTranslator extends Translator {
 
     @Override
     public RubyNode visitNthRefNode(org.jruby.ast.NthRefNode node) {
-        final RubyNode ret = new ReadMatchReferenceNode(context, translate(node.getPosition()), node.getMatchNumber());
+        final SourceSection sourceSection = translate(node.getPosition());
+        environment.declareVarWhereAllowed("$~");
+        final GetFromThreadLocalNode readMatchNode = new GetFromThreadLocalNode(context, sourceSection, environment.findLocalVarNode("$~", sourceSection));
+        final RubyNode ret = new ReadMatchReferenceNode(context, sourceSection, readMatchNode, node.getMatchNumber());
         return addNewlineIfNeeded(node, ret);
     }
 
@@ -3000,7 +3007,10 @@ public class BodyTranslator extends Translator {
                 throw new UnsupportedOperationException(Character.toString(node.getType()));
         }
 
-        final RubyNode ret = new ReadMatchReferenceNode(context, translate(node.getPosition()), index);
+        final SourceSection sourceSection = translate(node.getPosition());
+        environment.declareVarWhereAllowed("$~");
+        final GetFromThreadLocalNode readMatchNode = new GetFromThreadLocalNode(context, sourceSection, environment.findLocalVarNode("$~", sourceSection));
+        final RubyNode ret = new ReadMatchReferenceNode(context, sourceSection, readMatchNode, index);
         return addNewlineIfNeeded(node, ret);
     }
 
